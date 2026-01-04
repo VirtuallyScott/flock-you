@@ -2,11 +2,19 @@
 
 <img src="flock.png" alt="Flock You" width="300px">
 
-**Professional surveillance camera detection for the Oui-Spy device available at [colonelpanic.tech](https://colonelpanic.tech)**
+**Professional surveillance camera detection for ESP32-S3 based devices**
+
+*Available for [Oui-Spy](https://colonelpanic.tech) and [Unexpected Maker FeatherS3](https://unexpectedmaker.com/shop/feathers3)*
 
 ## Overview
 
-Flock You is an advanced detection system designed to identify Flock Safety surveillance cameras, Raven gunshot detectors, and similar surveillance devices using multiple detection methodologies. Built for the Xiao ESP32 S3 microcontroller, it provides real-time monitoring with audio alerts and comprehensive JSON output. The system now includes specialized BLE service UUID fingerprinting for detecting SoundThinking/ShotSpotter Raven acoustic surveillance devices.
+Flock You is an advanced detection system designed to identify Flock Safety surveillance cameras, Raven gunshot detectors, and similar surveillance devices using multiple detection methodologies. Built for ESP32-S3 microcontrollers, it provides real-time monitoring with visual/audio alerts and comprehensive JSON output. The system includes specialized BLE service UUID fingerprinting for detecting SoundThinking/ShotSpotter Raven acoustic surveillance devices.
+
+### Supported Platforms
+- **Oui-Spy** (Xiao ESP32-S3) - Buzzer-based audio alerts
+- **Unexpected Maker FeatherS3** - RGB LED visual alerts + iOS app connectivity
+- **Seeed Xiao ESP32-S3** - Buzzer-based audio alerts
+- **Seeed Xiao ESP32-C3** - Buzzer-based audio alerts
 
 ## Features
 
@@ -16,13 +24,29 @@ Flock You is an advanced detection system designed to identify Flock Safety surv
 - **MAC Address Filtering**: Detects devices by known MAC prefixes
 - **SSID Pattern Matching**: Identifies networks by specific names
 - **Device Name Pattern Matching**: Detects BLE devices by advertised names
-- **BLE Service UUID Detection**: Identifies Raven gunshot detectors by service UUIDs (NEW)
+- **BLE Service UUID Detection**: Identifies Raven gunshot detectors by service UUIDs
 
-### Audio Alert System
+### Alert Systems
+
+#### FeatherS3 Visual Alert System (RGB LED)
+- **Boot Sequence**: Blue → Green flash on startup
+- **Detection Alert**: 3 fast RED flashes when device detected
+- **Heartbeat Pulse**: Purple double-flash every 10 seconds while device in range
+- **Scanning Indicator**: Dim cyan while actively scanning
+- **Range Monitoring**: Automatic detection of device leaving range
+
+#### Oui-Spy/Xiao Audio Alert System (Buzzer)
 - **Boot Sequence**: 2 beeps (low pitch → high pitch) on startup
 - **Detection Alert**: 3 fast high-pitch beeps when device detected
 - **Heartbeat Pulse**: 2 beeps every 10 seconds while device remains in range
 - **Range Monitoring**: Automatic detection of device leaving range
+
+### iOS App Connectivity (FeatherS3)
+- **BLE GATT Server**: Broadcasts as "FlockFinder-S3" for iOS app discovery
+- **Real-time Detection Streaming**: Pushes detections to connected iOS app
+- **Live Scan Data**: Streams all WiFi/BLE scan results for debugging
+- **Command Interface**: Receive commands from iOS app (stream on/off)
+- **Channel Hop Notifications**: Real-time channel change updates
 
 ### Comprehensive Output
 - **JSON Detection Data**: Structured output with timestamps, RSSI, MAC addresses
@@ -40,12 +64,19 @@ Flock You is an advanced detection system designed to identify Flock Safety surv
 - **Audio**: Built-in buzzer system
 - **Connectivity**: USB-C for programming and power
 
-### Option 2: Standard Xiao ESP32 S3 Setup
+### Option 2: Unexpected Maker FeatherS3 (Recommended for iOS App)
+- **Microcontroller**: ESP32-S3 with 16MB Flash, 8MB PSRAM
+- **Wireless**: Dual WiFi/BLE scanning + BLE GATT server for iOS app
+- **Visual Alerts**: Built-in RGB NeoPixel LED (GPIO40 data, GPIO39 power)
+- **Connectivity**: USB-C for programming and power
+- **iOS App**: Connect via Bluetooth to "FlockFinder-S3"
+
+### Option 3: Standard Xiao ESP32 S3 Setup
 - **Microcontroller**: Xiao ESP32 S3 board
 - **Buzzer**: 3V buzzer connected to GPIO3 (D2)
 - **Power**: USB-C cable for programming and power
 
-### Wiring for Standard Setup
+### Wiring for Standard Xiao Setup
 ```
 Xiao ESP32 S3    Buzzer
 GPIO3 (D2)  ---> Positive (+)
@@ -67,11 +98,18 @@ GND         ---> Negative (-)
    cd flock-you
    ```
 
-2. **Connect your Oui-Spy device** via USB-C
+2. **Connect your device** via USB-C
 
-3. **Flash the firmware**:
+3. **Flash the firmware** (choose your board):
    ```bash
-   pio run --target upload
+   # For Unexpected Maker FeatherS3 (with RGB LED + iOS app support)
+   pio run -e um_feathers3 --target upload
+   
+   # For Oui-Spy / Xiao ESP32-S3 (with buzzer)
+   pio run -e xiao_esp32s3 --target upload
+   
+   # For Xiao ESP32-C3 (with buzzer)
+   pio run -e xiao_esp32c3 --target upload
    ```
 
 4. **Set up the web interface**:
@@ -168,11 +206,25 @@ When a Raven device is detected, the system provides:
 - **Interval**: 100ms scan intervals
 - **Window**: 99ms scan windows
 
-### Audio System
+### Audio System (Oui-Spy/Xiao)
 - **Boot Sequence**: 200Hz → 800Hz (300ms each)
 - **Detection Alert**: 1000Hz × 3 beeps (150ms each)
 - **Heartbeat**: 600Hz × 2 beeps (100ms each, 100ms gap)
 - **Frequency**: Every 10 seconds while device in range
+
+### Visual Alert System (FeatherS3)
+- **Boot Sequence**: Blue flash (300ms) → Green flash (300ms)
+- **Detection Alert**: 3 fast RED flashes (150ms each)
+- **Heartbeat**: Purple double-flash (100ms each)
+- **Scanning**: Dim cyan continuous indicator
+- **LED Brightness**: 50/255 (power efficient)
+
+### iOS App BLE Interface (FeatherS3)
+- **Service UUID**: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
+- **Detection Characteristic**: `beb5483e-36e1-4688-b7f5-ea07361b26a8` (notify)
+- **Command Characteristic**: `beb5483e-36e1-4688-b7f5-ea07361b26a9` (write)
+- **Stream Characteristic**: `beb5483e-36e1-4688-b7f5-ea07361b26aa` (notify)
+- **Device Name**: FlockFinder-S3
 
 ### JSON Output Format
 
@@ -230,17 +282,21 @@ When a Raven device is detected, the system provides:
 ## Usage
 
 ### Startup Sequence
-1. **Power on** the Oui-Spy device
-2. **Listen for boot beeps** (low → high pitch)
+1. **Power on** your device
+2. **Watch for boot indicator**:
+   - FeatherS3: Blue → Green LED flash
+   - Oui-Spy/Xiao: Low → High pitch beeps
 3. **Start the web server**: `python flockyou.py` (from the `api` directory)
 4. **Open the dashboard**: Navigate to `http://localhost:5000`
 5. **Connect devices**: Use the web interface to connect your Flock You device and GPS
 6. **System ready** when "hunting for Flock Safety devices" appears in the serial terminal
+7. **iOS app** (FeatherS3 only): Connect to "FlockFinder-S3" via Bluetooth
 
 ### Detection Monitoring
 - **Web Dashboard**: Real-time detection display at `http://localhost:5000`
 - **Serial Terminal**: Live device output in the web interface
-- **Audio Alerts**: Immediate notification of detections (device-side)
+- **Visual/Audio Alerts**: Immediate notification of detections (device-side)
+- **iOS App** (FeatherS3): Real-time detection push notifications
 - **Heartbeat**: Continuous monitoring while devices in range
 - **Range Tracking**: Automatic detection of device departure
 - **Export Options**: Download detections as CSV or KML files

@@ -10,22 +10,33 @@
 #include <stdint.h>
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
+#include <Adafruit_NeoPixel.h>
+#include "ble_broadcast.h"
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
-// Hardware Configuration
-#define BUZZER_PIN 3  // GPIO3 (D2) - PWM capable pin on Xiao ESP32 S3
+// Hardware Configuration - Unexpected Maker FeatherS3 RGB LED
+#define RGB_DATA_PIN 40      // FeatherS3 RGB LED data pin
+#define RGB_POWER_PIN 39     // FeatherS3 RGB LED power control
+#define NUM_PIXELS 1         // Single RGB LED on FeatherS3
 
-// Audio Configuration
-#define LOW_FREQ 200      // Boot sequence - low pitch
-#define HIGH_FREQ 800     // Boot sequence - high pitch & detection alert
-#define DETECT_FREQ 1000  // Detection alert - high pitch (faster beeps)
-#define HEARTBEAT_FREQ 600 // Heartbeat pulse frequency
-#define BOOT_BEEP_DURATION 300   // Boot beep duration
-#define DETECT_BEEP_DURATION 150 // Detection beep duration (faster)
-#define HEARTBEAT_DURATION 100   // Short heartbeat pulse
+// Create NeoPixel object
+Adafruit_NeoPixel pixel(NUM_PIXELS, RGB_DATA_PIN, NEO_GRB + NEO_KHZ800);
+
+// LED Colors (RGB format)
+#define COLOR_OFF       pixel.Color(0, 0, 0)
+#define COLOR_BOOT_LOW  pixel.Color(0, 0, 50)      // Blue - boot sequence
+#define COLOR_BOOT_HIGH pixel.Color(0, 50, 0)      // Green - boot complete
+#define COLOR_DETECT    pixel.Color(255, 0, 0)     // Red - detection alert!
+#define COLOR_HEARTBEAT pixel.Color(50, 0, 50)     // Purple - heartbeat
+#define COLOR_SCANNING  pixel.Color(0, 20, 20)     // Cyan dim - scanning
+
+// Visual Alert Timing
+#define BOOT_FLASH_DURATION 300   // Boot flash duration
+#define DETECT_FLASH_DURATION 150 // Detection flash duration (faster)
+#define HEARTBEAT_DURATION 100    // Short heartbeat pulse
 
 // WiFi Promiscuous Mode Configuration
 #define MAX_CHANNEL 13
@@ -135,34 +146,65 @@ static unsigned long last_detection_time = 0;
 static unsigned long last_heartbeat = 0;
 static NimBLEScan* pBLEScan;
 
-
+// ============================================================================
+// FORWARD DECLARATIONS
+// ============================================================================
+void led_flash(uint32_t color, int duration_ms);
+void init_led();
+void boot_led_sequence();
+void flock_detected_led_sequence();
+void heartbeat_pulse();
 
 // ============================================================================
-// AUDIO SYSTEM
+// LED VISUAL ALERT SYSTEM (FeatherS3 RGB LED)
 // ============================================================================
 
-void beep(int frequency, int duration_ms)
+void led_flash(uint32_t color, int duration_ms)
 {
-    tone(BUZZER_PIN, frequency, duration_ms);
-    delay(duration_ms + 50);
+    pixel.setPixelColor(0, color);
+    pixel.show();
+    delay(duration_ms);
+    pixel.setPixelColor(0, COLOR_OFF);
+    pixel.show();
+    delay(50);
 }
 
-void boot_beep_sequence()
+void init_led()
 {
-    printf("Initializing audio system...\n");
-    printf("Playing boot sequence: Low -> High pitch\n");
-    beep(LOW_FREQ, BOOT_BEEP_DURATION);
-    beep(HIGH_FREQ, BOOT_BEEP_DURATION);
-    printf("Audio system ready\n\n");
+    // Enable RGB LED power on FeatherS3
+    pinMode(RGB_POWER_PIN, OUTPUT);
+    digitalWrite(RGB_POWER_PIN, HIGH);
+    delay(10);
+    
+    // Initialize NeoPixel
+    pixel.begin();
+    pixel.setBrightness(50);  // Set to 50/255 brightness
+    pixel.clear();
+    pixel.show();
 }
 
-void flock_detected_beep_sequence()
+void boot_led_sequence()
+{
+    printf("Initializing LED visual system...\n");
+    printf("Playing boot sequence: Blue -> Green\n");
+    led_flash(COLOR_BOOT_LOW, BOOT_FLASH_DURATION);   // Blue flash
+    led_flash(COLOR_BOOT_HIGH, BOOT_FLASH_DURATION);  // Green flash
+    // Leave green on briefly to show ready
+    pixel.setPixelColor(0, COLOR_BOOT_HIGH);
+    pixel.show();
+    delay(500);
+    pixel.setPixelColor(0, COLOR_SCANNING);
+    pixel.show();
+    printf("LED system ready\n\n");
+}
+
+void flock_detected_led_sequence()
 {
     printf("FLOCK SAFETY DEVICE DETECTED!\n");
-    printf("Playing alert sequence: 3 fast high-pitch beeps\n");
+    printf("LED alert sequence: 3 fast RED flashes\n");
     for (int i = 0; i < 3; i++) {
-        beep(DETECT_FREQ, DETECT_BEEP_DURATION);
-        if (i < 2) delay(50); // Short gap between beeps
+        led_flash(COLOR_DETECT, DETECT_FLASH_DURATION);
+        if (i < 2) delay(50); // Short gap between flashes
     }
     printf("Detection complete - device identified!\n\n");
     
@@ -170,14 +212,21 @@ void flock_detected_beep_sequence()
     device_in_range = true;
     last_detection_time = millis();
     last_heartbeat = millis();
+    
+    // Keep LED red while device in range
+    pixel.setPixelColor(0, COLOR_DETECT);
+    pixel.show();
 }
 
 void heartbeat_pulse()
 {
     printf("Heartbeat: Device still in range\n");
-    beep(HEARTBEAT_FREQ, HEARTBEAT_DURATION);
+    led_flash(COLOR_HEARTBEAT, HEARTBEAT_DURATION);
     delay(100);
-    beep(HEARTBEAT_FREQ, HEARTBEAT_DURATION);
+    led_flash(COLOR_HEARTBEAT, HEARTBEAT_DURATION);
+    // Return to detection color
+    pixel.setPixelColor(0, COLOR_DETECT);
+    pixel.show();
 }
 
 // ============================================================================
@@ -522,14 +571,22 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
         ssid[payload[1]] = '\0';
     }
     
+    const char* frameTypeStr = (frame_type == 0x20) ? "probe" : "beacon";
+    
+    // Stream ALL WiFi packets to iOS app for debug view
+    streamWiFiScan(ssid[0] ? ssid : "(hidden)", hdr->addr2, ppkt->rx_ctrl.rssi, current_channel, frameTypeStr);
+    
     // Check if SSID matches our patterns
     if (strlen(ssid) > 0 && check_ssid_pattern(ssid)) {
         const char* detection_type = (frame_type == 0x20) ? "probe_request" : "beacon";
         output_wifi_detection_json(ssid, hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
         
+        // Broadcast to iOS app if connected
+        broadcastWiFiDetection(ssid, hdr->addr2, ppkt->rx_ctrl.rssi);
+        
         if (!triggered) {
             triggered = true;
-            flock_detected_beep_sequence();
+            flock_detected_led_sequence();
         }
         // Always update detection time for heartbeat tracking
         last_detection_time = millis();
@@ -541,9 +598,12 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
         const char* detection_type = (frame_type == 0x20) ? "probe_request_mac" : "beacon_mac";
         output_wifi_detection_json(ssid[0] ? ssid : "hidden", hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
         
+        // Broadcast to iOS app if connected
+        broadcastWiFiDetection(ssid[0] ? ssid : "unknown", hdr->addr2, ppkt->rx_ctrl.rssi);
+        
         if (!triggered) {
             triggered = true;
-            flock_detected_beep_sequence();
+            flock_detected_led_sequence();
         }
         // Always update detection time for heartbeat tracking
         last_detection_time = millis();
@@ -570,12 +630,21 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             name = advertisedDevice->getName();
         }
         
+        bool hasServices = advertisedDevice->haveServiceUUID();
+        
+        // Stream ALL BLE devices to iOS app for debug view
+        streamBLEScan(name.c_str(), addrStr.c_str(), rssi, hasServices);
+        
         // Check MAC prefix
         if (check_mac_prefix(mac)) {
             output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "mac_prefix");
+            
+            // Broadcast to iOS app
+            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, "Flock Safety");
+            
             if (!triggered) {
                 triggered = true;
-                flock_detected_beep_sequence();
+                flock_detected_led_sequence();
             }
             // Always update detection time for heartbeat tracking
             last_detection_time = millis();
@@ -585,9 +654,16 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
         // Check device name
         if (!name.empty() && check_device_name_pattern(name.c_str())) {
             output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "device_name");
+            
+            // Broadcast to iOS app - determine type from name
+            const char* devType = "Flock Safety";
+            if (strcasestr(name.c_str(), "penguin")) devType = "Penguin";
+            else if (strcasestr(name.c_str(), "pigvision")) devType = "Pigvision";
+            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, devType);
+            
             if (!triggered) {
                 triggered = true;
-                flock_detected_beep_sequence();
+                flock_detected_led_sequence();
             }
             // Always update detection time for heartbeat tracking
             last_detection_time = millis();
@@ -636,9 +712,12 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             serializeJson(doc, Serial);
             Serial.println();
             
+            // Broadcast Raven detection to iOS app
+            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, "Raven (Gunshot Detector)");
+            
             if (!triggered) {
                 triggered = true;
-                flock_detected_beep_sequence();
+                flock_detected_led_sequence();
             }
             // Always update detection time for heartbeat tracking
             last_detection_time = millis();
@@ -661,7 +740,8 @@ void hop_channel()
         }
         esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
         last_channel_hop = now;
-         printf("[WiFi] Hopped to channel %d\n", current_channel);
+        // Stream channel hop to iOS app
+        streamChannelHop(current_channel);
     }
 }
 
@@ -674,14 +754,14 @@ void setup()
     Serial.begin(115200);
     delay(1000);
     
-    // Initialize buzzer
-    pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, LOW);
-    boot_beep_sequence();
+    // Initialize RGB LED (FeatherS3)
+    init_led();
+    boot_led_sequence();
     
     printf("Starting Flock Squawk Enhanced Detection System...\n\n");
     
-    // Initialize WiFi in promiscuous mode
+    // Initialize WiFi in promiscuous mode for surveillance device detection
+    printf("[WiFi] Initializing promiscuous scanning mode...\n");
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
@@ -693,9 +773,14 @@ void setup()
     printf("WiFi promiscuous mode enabled on channel %d\n", current_channel);
     printf("Monitoring probe requests and beacons...\n");
     
-    // Initialize BLE
-    printf("Initializing BLE scanner...\n");
-    NimBLEDevice::init("");
+    // Initialize BLE with device name for iOS app discovery
+    printf("Initializing BLE...\n");
+    NimBLEDevice::init("FlockFinder-S3");
+    
+    // Initialize BLE broadcast service for iOS app connection
+    initBLEBroadcast();
+    
+    // Initialize BLE scanner for detecting surveillance devices
     pBLEScan = NimBLEDevice::getScan();
     pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
     pBLEScan->setActiveScan(true);
@@ -703,7 +788,8 @@ void setup()
     pBLEScan->setWindow(99);
     
     printf("BLE scanner initialized\n");
-    printf("System ready - hunting for Flock Safety devices...\n\n");
+    printf("System ready - hunting for Flock Safety devices...\n");
+    printf("iOS app can connect via Bluetooth to 'FlockFinder-S3'\n\n");
     
     last_channel_hop = millis();
 }
@@ -732,7 +818,7 @@ void loop()
     }
     
     if (millis() - last_ble_scan >= BLE_SCAN_INTERVAL && !pBLEScan->isScanning()) {
-        printf("[BLE] scan...\n");
+        streamStatus("BLE scan starting...");
         pBLEScan->start(BLE_SCAN_DURATION, false);
         last_ble_scan = millis();
     }
