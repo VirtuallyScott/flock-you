@@ -42,6 +42,7 @@ Flock You is an advanced detection system designed to identify Flock Safety surv
 - **Range Monitoring**: Automatic detection of device leaving range
 
 ### iOS App Connectivity (FeatherS3)
+- **Companion App**: [FlockFinder iOS App](https://github.com/VirtuallyScott/FlockFinderApp) ([Download](https://virtuallyscott.github.io/FlockFinderApp/))
 - **BLE GATT Server**: Broadcasts as "FlockFinder-S3" for iOS app discovery
 - **Real-time Detection Streaming**: Pushes detections to connected iOS app
 - **Live Scan Data**: Streams all WiFi/BLE scan results for debugging
@@ -290,7 +291,7 @@ When a Raven device is detected, the system provides:
 4. **Open the dashboard**: Navigate to `http://localhost:5000`
 5. **Connect devices**: Use the web interface to connect your Flock You device and GPS
 6. **System ready** when "hunting for Flock Safety devices" appears in the serial terminal
-7. **iOS app** (FeatherS3 only): Connect to "FlockFinder-S3" via Bluetooth
+7. **iOS app** (FeatherS3 only): Download [FlockFinder](https://virtuallyscott.github.io/FlockFinderApp/) and connect to "FlockFinder-S3" via Bluetooth
 
 ### Detection Monitoring
 - **Web Dashboard**: Real-time detection display at `http://localhost:5000`
