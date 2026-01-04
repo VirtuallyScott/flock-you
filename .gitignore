@@ -1,6 +1,69 @@
 
-.pio/
+# Build outputs
+*.egg-info/
+build/
+dist/
 
+# Coverage reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# IDE
+*.swo
+*.swp
+*~
+.idea/
 .vscode/
 
+# Jupyter
+.ipynb_checkpoints/
+
+# Local configuration
+*.local
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# macOS
+._*
+.AppleDouble
 .DS_Store
+.LSOverride
+
+# MkDocs
+mkdocs/site/
+
+# Node (if any web tooling)
+node_modules/
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Python cache
+*$py.class
+*.py[cod]
+*.so
+.Python
+__pycache__/
+pip-delete-this-directory.txt
+pip-log.txt
+
+# Python virtual environments
+.venv/
+api/venv/
+env/
+ENV/
+mkdocs/.venv/
+venv/
+
+# Temporary files
+*.bak
+*.temp
+*.tmp
