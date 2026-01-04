@@ -2,9 +2,14 @@
 
 <img src="flock.png" alt="Flock You" width="300px">
 
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://virtuallyscott.github.io/flock-you/)
+[![iOS App](https://img.shields.io/badge/iOS-FlockFinder%20App-orange)](https://github.com/VirtuallyScott/FlockFinderApp)
+
 **Professional surveillance camera detection for ESP32-S3 based devices**
 
 *Available for [Oui-Spy](https://colonelpanic.tech) and [Unexpected Maker FeatherS3](https://unexpectedmaker.com/shop/feathers3)*
+
+📖 **[Full Documentation](https://virtuallyscott.github.io/flock-you/)** | 📱 **[FlockFinder iOS App](https://github.com/VirtuallyScott/FlockFinderApp)**
 
 ## Overview
 
