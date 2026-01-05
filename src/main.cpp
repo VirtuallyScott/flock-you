@@ -478,12 +478,18 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
     
     const char* frameTypeStr = (frame_type == 0x20) ? "probe" : "beacon";
     
-    // Stream ALL WiFi packets to iOS app for debug view
-    streamWiFiScan(ssid[0] ? ssid : "(hidden)", hdr->addr2, ppkt->rx_ctrl.rssi, current_channel, frameTypeStr);
+    // Check if SSID or MAC matches our patterns FIRST to determine match status
+    bool isMatch = false;
+    String ssidDeviceType, macDeviceType;
+    bool ssidMatched = (strlen(ssid) > 0 && check_ssid_pattern(ssid, ssidDeviceType));
+    bool macMatched = check_mac_prefix(hdr->addr2, macDeviceType);
+    isMatch = ssidMatched || macMatched;
     
-    // Check if SSID matches our patterns
-    String ssidDeviceType;
-    if (strlen(ssid) > 0 && check_ssid_pattern(ssid, ssidDeviceType)) {
+    // Stream WiFi packet to iOS app (respects streamMode setting)
+    streamWiFiScan(ssid[0] ? ssid : "(hidden)", hdr->addr2, ppkt->rx_ctrl.rssi, current_channel, frameTypeStr, isMatch);
+    
+    // Process SSID match detection
+    if (ssidMatched) {
         const char* detection_type = (frame_type == 0x20) ? "probe_request" : "beacon";
         output_wifi_detection_json(ssid, hdr->addr2, ppkt->rx_ctrl.rssi, detection_type, ssidDeviceType.c_str());
         
@@ -499,9 +505,8 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
         return;
     }
     
-    // Check MAC address
-    String macDeviceType;
-    if (check_mac_prefix(hdr->addr2, macDeviceType)) {
+    // Process MAC match detection
+    if (macMatched) {
         const char* detection_type = (frame_type == 0x20) ? "probe_request_mac" : "beacon_mac";
         output_wifi_detection_json(ssid[0] ? ssid : "hidden", hdr->addr2, ppkt->rx_ctrl.rssi, detection_type, macDeviceType.c_str());
         
@@ -542,12 +547,22 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
         
         bool hasServices = advertisedDevice->haveServiceUUID();
         
-        // Stream ALL BLE devices to iOS app for debug view
-        streamBLEScan(name.c_str(), addrStr.c_str(), rssi, hasServices);
+        // Check if this device matches any patterns FIRST
+        bool isMatch = false;
+        String macDeviceType, nameDeviceType, uuidDeviceType;
         
-        // Check MAC prefix using ConfigManager
-        String macDeviceType;
-        if (check_mac_prefix(mac, macDeviceType)) {
+        bool macMatched = check_mac_prefix(mac, macDeviceType);
+        bool nameMatched = (!name.empty() && check_device_name_pattern(name.c_str(), nameDeviceType));
+        char detected_service_uuid[41] = {0};
+        bool uuidMatched = check_raven_service_uuid(advertisedDevice, detected_service_uuid, &uuidDeviceType);
+        
+        isMatch = macMatched || nameMatched || uuidMatched;
+        
+        // Stream BLE device to iOS app (respects streamMode setting)
+        streamBLEScan(name.c_str(), addrStr.c_str(), rssi, hasServices, isMatch);
+        
+        // Process MAC match detection
+        if (macMatched) {
             output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "mac_prefix", macDeviceType.c_str());
             
             // Broadcast to iOS app
@@ -562,9 +577,8 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             return;
         }
         
-        // Check device name using ConfigManager
-        String nameDeviceType;
-        if (!name.empty() && check_device_name_pattern(name.c_str(), nameDeviceType)) {
+        // Process device name match detection
+        if (nameMatched) {
             output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "device_name", nameDeviceType.c_str());
             
             // Broadcast to iOS app with correct type from config
@@ -579,10 +593,8 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             return;
         }
         
-        // Check for surveillance device service UUIDs using ConfigManager
-        char detected_service_uuid[41] = {0};
-        String uuidDeviceType;
-        if (check_raven_service_uuid(advertisedDevice, detected_service_uuid, &uuidDeviceType)) {
+        // Process UUID match detection
+        if (uuidMatched) {
             // Surveillance device detected! Get firmware version estimate
             const char* fw_version = estimate_raven_firmware_version(advertisedDevice);
             const char* service_desc = get_raven_service_description(detected_service_uuid);
@@ -662,6 +674,9 @@ void hop_channel()
 // CONFIGURATION UPDATE CALLBACK
 // ============================================================================
 
+// Forward declaration
+void updateScanModes();
+
 void onConfigurationUpdated() {
     Serial.println("[Main] Configuration updated from iOS app!");
     
@@ -672,7 +687,8 @@ void onConfigurationUpdated() {
     // Print new config
     configManager.printConfig();
     
-    // Note: Scan parameters will take effect on next scan cycle
+    // Apply scan mode changes immediately
+    updateScanModes();
 }
 
 // ============================================================================
@@ -700,21 +716,27 @@ void setup()
     printf("[Config] Initializing configuration manager...\n");
     configManager.begin();
     
+    ScanConfig& cfg = configManager.getScanConfig();
+    
     // Initialize WiFi in promiscuous mode for surveillance device detection
-    printf("[WiFi] Initializing promiscuous scanning mode...\n");
+    printf("[WiFi] Initializing WiFi (enabled: %s)...\n", cfg.wifiScanEnabled ? "YES" : "NO");
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
     
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
-    esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
-    
-    printf("WiFi promiscuous mode enabled on channel %d\n", current_channel);
-    printf("Monitoring probe requests and beacons...\n");
+    if (cfg.wifiScanEnabled) {
+        esp_wifi_set_promiscuous(true);
+        esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
+        esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
+        printf("WiFi promiscuous mode enabled on channel %d\n", current_channel);
+        printf("Note: ESP32 only supports 2.4GHz WiFi scanning (channels 1-14)\n");
+    } else {
+        esp_wifi_set_promiscuous(false);
+        printf("WiFi scanning disabled\n");
+    }
     
     // Initialize BLE with device name for iOS app discovery
-    printf("Initializing BLE...\n");
+    printf("[BLE] Initializing BLE (scanning enabled: %s)...\n", cfg.bleScanEnabled ? "YES" : "NO");
     NimBLEDevice::init("FlockFinder-S3");
     
     // Initialize BLE broadcast service for iOS app connection
@@ -731,18 +753,39 @@ void setup()
     pBLEScan->setWindow(99);
     
     printf("BLE scanner initialized\n");
+    printf("Stream mode: %s\n", cfg.streamMode == STREAM_MATCHES_ONLY ? "MATCHES ONLY" : "ALL DEVICES");
     printf("System ready - hunting for surveillance devices...\n");
     printf("iOS app can connect via Bluetooth to 'FlockFinder-S3'\n\n");
     
     last_channel_hop = millis();
 }
 
+// Helper to update scan modes dynamically when config changes
+void updateScanModes() {
+    ScanConfig& cfg = configManager.getScanConfig();
+    
+    // Update WiFi promiscuous mode
+    if (cfg.wifiScanEnabled) {
+        esp_wifi_set_promiscuous(true);
+        esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
+        printf("[Config] WiFi scanning ENABLED\n");
+    } else {
+        esp_wifi_set_promiscuous(false);
+        printf("[Config] WiFi scanning DISABLED\n");
+    }
+    
+    printf("[Config] BLE scanning: %s\n", cfg.bleScanEnabled ? "ENABLED" : "DISABLED");
+    printf("[Config] Stream mode: %s\n", cfg.streamMode == STREAM_MATCHES_ONLY ? "MATCHES ONLY" : "ALL DEVICES");
+}
+
 void loop()
 {
     ScanConfig& cfg = configManager.getScanConfig();
     
-    // Handle channel hopping for WiFi promiscuous mode
-    hop_channel();
+    // Handle channel hopping for WiFi promiscuous mode (only if WiFi enabled)
+    if (cfg.wifiScanEnabled) {
+        hop_channel();
+    }
     
     // Handle heartbeat pulse if device is in range
     if (device_in_range) {
@@ -765,8 +808,8 @@ void loop()
         }
     }
     
-    // BLE scanning with dynamic interval
-    if (millis() - last_ble_scan >= cfg.bleScanInterval && !pBLEScan->isScanning()) {
+    // BLE scanning with dynamic interval (only if BLE scanning enabled)
+    if (cfg.bleScanEnabled && millis() - last_ble_scan >= cfg.bleScanInterval && !pBLEScan->isScanning()) {
         streamStatus("BLE scan starting...");
         pBLEScan->start(cfg.bleScanDuration, false);
         last_ble_scan = millis();

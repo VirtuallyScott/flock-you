@@ -62,13 +62,27 @@ struct BleUuidPattern {
     bool enabled;
 };
 
+// Stream mode options
+enum StreamMode {
+    STREAM_ALL = 0,          // Stream all scanned devices
+    STREAM_MATCHES_ONLY = 1  // Only stream devices matching patterns
+};
+
 struct ScanConfig {
+    // Scan enable flags
+    bool wifiScanEnabled;         // Enable WiFi promiscuous scanning
+    bool bleScanEnabled;          // Enable BLE scanning
+    
+    // Scan timing
     uint8_t bleScanDuration;      // seconds
     uint16_t bleScanInterval;     // milliseconds between scans
     uint16_t channelHopInterval;  // milliseconds
-    uint8_t maxChannel;           // max WiFi channel (13 or 14)
+    uint8_t maxChannel;           // max WiFi channel (13 or 14) - Note: ESP32 only supports 2.4GHz
     uint16_t heartbeatInterval;   // milliseconds
     uint32_t detectionTimeout;    // milliseconds
+    
+    // Stream configuration
+    StreamMode streamMode;        // What to stream to iOS app
 };
 
 // ============================================================================
@@ -243,12 +257,15 @@ public:
         
         // Scan config
         JsonObject scan = doc.createNestedObject("scanConfig");
+        scan["wifiScanEnabled"] = scanConfig.wifiScanEnabled;
+        scan["bleScanEnabled"] = scanConfig.bleScanEnabled;
         scan["bleScanDuration"] = scanConfig.bleScanDuration;
         scan["bleScanInterval"] = scanConfig.bleScanInterval;
         scan["channelHopInterval"] = scanConfig.channelHopInterval;
         scan["maxChannel"] = scanConfig.maxChannel;
         scan["heartbeatInterval"] = scanConfig.heartbeatInterval;
         scan["detectionTimeout"] = scanConfig.detectionTimeout;
+        scan["streamMode"] = static_cast<int>(scanConfig.streamMode);
         
         // Patterns
         JsonObject patterns = doc.createNestedObject("patterns");
@@ -315,12 +332,15 @@ public:
         // Parse scan config
         if (doc.containsKey("scanConfig")) {
             JsonObject scan = doc["scanConfig"];
+            scanConfig.wifiScanEnabled = scan["wifiScanEnabled"] | true;
+            scanConfig.bleScanEnabled = scan["bleScanEnabled"] | true;
             scanConfig.bleScanDuration = scan["bleScanDuration"] | DEFAULT_BLE_SCAN_DURATION;
             scanConfig.bleScanInterval = scan["bleScanInterval"] | DEFAULT_BLE_SCAN_INTERVAL;
             scanConfig.channelHopInterval = scan["channelHopInterval"] | DEFAULT_CHANNEL_HOP_INTERVAL;
             scanConfig.maxChannel = scan["maxChannel"] | DEFAULT_MAX_CHANNEL;
             scanConfig.heartbeatInterval = scan["heartbeatInterval"] | DEFAULT_HEARTBEAT_INTERVAL;
             scanConfig.detectionTimeout = scan["detectionTimeout"] | DEFAULT_DETECTION_TIMEOUT;
+            scanConfig.streamMode = static_cast<StreamMode>(scan["streamMode"] | 0);
         }
         
         // Parse patterns
@@ -465,12 +485,15 @@ private:
 
     void loadDefaults() {
         // Default scan configuration
+        scanConfig.wifiScanEnabled = true;   // WiFi scanning enabled by default
+        scanConfig.bleScanEnabled = true;    // BLE scanning enabled by default
         scanConfig.bleScanDuration = DEFAULT_BLE_SCAN_DURATION;
         scanConfig.bleScanInterval = DEFAULT_BLE_SCAN_INTERVAL;
         scanConfig.channelHopInterval = DEFAULT_CHANNEL_HOP_INTERVAL;
         scanConfig.maxChannel = DEFAULT_MAX_CHANNEL;
         scanConfig.heartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL;
         scanConfig.detectionTimeout = DEFAULT_DETECTION_TIMEOUT;
+        scanConfig.streamMode = STREAM_ALL;  // Stream all data by default
 
         // Clear existing patterns
         ssidPatterns.clear();

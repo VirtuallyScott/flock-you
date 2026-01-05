@@ -283,13 +283,20 @@ void broadcastBLEDetection(const char* deviceName, const char* macAddress, int r
 // STREAM LIVE SCAN DATA TO IOS APP
 // ============================================================================
 
-// Stream a WiFi scan result to iOS app (all scanned devices, not just detections)
-void streamWiFiScan(const char* ssid, const uint8_t* mac, int rssi, int channel, const char* frameType) {
+// Stream a WiFi scan result to iOS app
+// If streamMode is STREAM_MATCHES_ONLY, only streams if isMatch is true
+void streamWiFiScan(const char* ssid, const uint8_t* mac, int rssi, int channel, const char* frameType, bool isMatch = false) {
     if (!deviceConnected || !pStreamCharacteristic || !streamingEnabled) {
         return;
     }
     
-    StaticJsonDocument<200> doc;
+    // Check stream mode - only stream if mode is ALL or this is a match
+    ConfigManager& cfg = ConfigManager::getInstance();
+    if (cfg.getScanConfig().streamMode == STREAM_MATCHES_ONLY && !isMatch) {
+        return;
+    }
+    
+    StaticJsonDocument<256> doc;
     doc["evt"] = "wifi_scan";
     doc["ssid"] = ssid ? ssid : "";
     
@@ -301,29 +308,38 @@ void streamWiFiScan(const char* ssid, const uint8_t* mac, int rssi, int channel,
     doc["ch"] = channel;
     doc["type"] = frameType;
     doc["ts"] = millis();
+    doc["match"] = isMatch;  // Include match status
     
-    char buffer[200];
+    char buffer[256];
     size_t len = serializeJson(doc, buffer);
     
     pStreamCharacteristic->setValue((uint8_t*)buffer, len);
     pStreamCharacteristic->notify();
 }
 
-// Stream a BLE scan result to iOS app (all BLE devices found)
-void streamBLEScan(const char* name, const char* mac, int rssi, bool hasServices) {
+// Stream a BLE scan result to iOS app
+// If streamMode is STREAM_MATCHES_ONLY, only streams if isMatch is true
+void streamBLEScan(const char* name, const char* mac, int rssi, bool hasServices, bool isMatch = false) {
     if (!deviceConnected || !pStreamCharacteristic || !streamingEnabled) {
         return;
     }
     
-    StaticJsonDocument<200> doc;
+    // Check stream mode - only stream if mode is ALL or this is a match
+    ConfigManager& cfg = ConfigManager::getInstance();
+    if (cfg.getScanConfig().streamMode == STREAM_MATCHES_ONLY && !isMatch) {
+        return;
+    }
+    
+    StaticJsonDocument<256> doc;
     doc["evt"] = "ble_scan";
     doc["name"] = name ? name : "";
     doc["mac"] = mac;
     doc["rssi"] = rssi;
     doc["svc"] = hasServices;
     doc["ts"] = millis();
+    doc["match"] = isMatch;  // Include match status
     
-    char buffer[200];
+    char buffer[256];
     size_t len = serializeJson(doc, buffer);
     
     pStreamCharacteristic->setValue((uint8_t*)buffer, len);
