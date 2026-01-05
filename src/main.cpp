@@ -11,6 +11,7 @@
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
 #include <Adafruit_NeoPixel.h>
+#include "config_manager.h"
 #include "ble_broadcast.h"
 
 // ============================================================================
@@ -32,107 +33,33 @@ Adafruit_NeoPixel pixel(NUM_PIXELS, RGB_DATA_PIN, NEO_GRB + NEO_KHZ800);
 #define COLOR_DETECT    pixel.Color(255, 0, 0)     // Red - detection alert!
 #define COLOR_HEARTBEAT pixel.Color(50, 0, 50)     // Purple - heartbeat
 #define COLOR_SCANNING  pixel.Color(0, 20, 20)     // Cyan dim - scanning
+#define COLOR_CONFIG    pixel.Color(0, 50, 50)     // Cyan bright - config update
 
 // Visual Alert Timing
 #define BOOT_FLASH_DURATION 300   // Boot flash duration
 #define DETECT_FLASH_DURATION 150 // Detection flash duration (faster)
 #define HEARTBEAT_DURATION 100    // Short heartbeat pulse
 
-// WiFi Promiscuous Mode Configuration
-#define MAX_CHANNEL 13
-#define CHANNEL_HOP_INTERVAL 500  // milliseconds
-
-// BLE SCANNING CONFIGURATION
-#define BLE_SCAN_DURATION 1    // Seconds
-#define BLE_SCAN_INTERVAL 5000 // Milliseconds between scans
-static unsigned long last_ble_scan = 0;
-
-// Detection Pattern Limits
-#define MAX_SSID_PATTERNS 10
-#define MAX_MAC_PATTERNS 50
-#define MAX_DEVICE_NAMES 20
+// ============================================================================
+// SCAN CONFIGURATION (Now dynamic via ConfigManager)
+// ============================================================================
+// Scan intervals are now managed by ConfigManager and can be updated via iOS app.
+// These are just initial values before config is loaded.
 
 // ============================================================================
-// DETECTION PATTERNS (Extracted from Real Flock Safety Device Databases)
+// RAVEN SURVEILLANCE DEVICE - These UUIDs are used for detection only
+// The actual pattern matching uses ConfigManager's BLE UUID patterns
 // ============================================================================
 
-// WiFi SSID patterns to detect (case-insensitive)
-static const char* wifi_ssid_patterns[] = {
-    "flock",        // Standard Flock Safety naming
-    "Flock",        // Capitalized variant
-    "FLOCK",        // All caps variant
-    "FS Ext Battery", // Flock Safety Extended Battery devices
-    "Penguin",      // Penguin surveillance devices
-    "Pigvision"     // Pigvision surveillance systems
-};
-
-// Known Flock Safety MAC address prefixes (from real device databases)
-static const char* mac_prefixes[] = {
-    // FS Ext Battery devices
-    "58:8e:81", "cc:cc:cc", "ec:1b:bd", "90:35:ea", "04:0d:84", 
-    "f0:82:c0", "1c:34:f1", "38:5b:44", "94:34:69", "b4:e3:f9",
-    
-    // Flock WiFi devices
-    "70:c9:4e", "3c:91:80", "d8:f3:bc", "80:30:49", "14:5a:fc",
-    "74:4c:a1", "08:3a:88", "9c:2f:9d", "94:08:53", "e4:aa:ea"
-    
-    // Penguin devices - these are NOT OUI based, so use local ouis
-    // from the wigle.net db relative to your location 
-    // "cc:09:24", "ed:c7:63", "e8:ce:56", "ea:0c:ea", "d8:8f:14",
-    // "f9:d9:c0", "f1:32:f9", "f6:a0:76", "e4:1c:9e", "e7:f2:43",
-    // "e2:71:33", "da:91:a9", "e1:0e:15", "c8:ae:87", "f4:ed:b2",
-    // "d8:bf:b5", "ee:8f:3c", "d7:2b:21", "ea:5a:98"
-};
-
-// Device name patterns for BLE advertisement detection
-static const char* device_name_patterns[] = {
-    "FS Ext Battery",  // Flock Safety Extended Battery
-    "Penguin",         // Penguin surveillance devices
-    "Flock",           // Standard Flock Safety devices
-    "Pigvision"        // Pigvision surveillance systems
-};
-
-// ============================================================================
-// RAVEN SURVEILLANCE DEVICE UUID PATTERNS
-// ============================================================================
-// These UUIDs are specific to Raven surveillance devices (acoustic gunshot detection)
-// Source: raven_configurations.json - firmware versions 1.1.7, 1.2.0, 1.3.1
-
-// Raven Device Information Service (used across all firmware versions)
+// Raven service UUIDs for firmware version detection (kept for version estimation)
 #define RAVEN_DEVICE_INFO_SERVICE       "0000180a-0000-1000-8000-00805f9b34fb"
-
-// Raven GPS Location Service (firmware 1.2.0+)
 #define RAVEN_GPS_SERVICE               "00003100-0000-1000-8000-00805f9b34fb"
-
-// Raven Power/Battery Service (firmware 1.2.0+)
 #define RAVEN_POWER_SERVICE             "00003200-0000-1000-8000-00805f9b34fb"
-
-// Raven Network Status Service (firmware 1.2.0+)
 #define RAVEN_NETWORK_SERVICE           "00003300-0000-1000-8000-00805f9b34fb"
-
-// Raven Upload Statistics Service (firmware 1.2.0+)
 #define RAVEN_UPLOAD_SERVICE            "00003400-0000-1000-8000-00805f9b34fb"
-
-// Raven Error/Failure Service (firmware 1.2.0+)
 #define RAVEN_ERROR_SERVICE             "00003500-0000-1000-8000-00805f9b34fb"
-
-// Health Thermometer Service (firmware 1.1.7)
 #define RAVEN_OLD_HEALTH_SERVICE        "00001809-0000-1000-8000-00805f9b34fb"
-
-// Location and Navigation Service (firmware 1.1.7)
 #define RAVEN_OLD_LOCATION_SERVICE      "00001819-0000-1000-8000-00805f9b34fb"
-
-// Known Raven service UUIDs for detection
-static const char* raven_service_uuids[] = {
-    RAVEN_DEVICE_INFO_SERVICE,    // Device info (all versions)
-    RAVEN_GPS_SERVICE,            // GPS data (1.2.0+)
-    RAVEN_POWER_SERVICE,          // Battery/Solar (1.2.0+)
-    RAVEN_NETWORK_SERVICE,        // LTE/WiFi status (1.2.0+)
-    RAVEN_UPLOAD_SERVICE,         // Upload stats (1.2.0+)
-    RAVEN_ERROR_SERVICE,          // Error tracking (1.2.0+)
-    RAVEN_OLD_HEALTH_SERVICE,     // Old health service (1.1.7)
-    RAVEN_OLD_LOCATION_SERVICE    // Old location service (1.1.7)
-};
 
 // ============================================================================
 // GLOBAL VARIABLES
@@ -145,6 +72,9 @@ static bool device_in_range = false;
 static unsigned long last_detection_time = 0;
 static unsigned long last_heartbeat = 0;
 static NimBLEScan* pBLEScan;
+
+// Forward declaration for config update callback
+void onConfigurationUpdated();
 
 // ============================================================================
 // FORWARD DECLARATIONS
@@ -233,7 +163,7 @@ void heartbeat_pulse()
 // JSON OUTPUT FUNCTIONS
 // ============================================================================
 
-void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, const char* detection_type)
+void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, const char* detection_type, const char* deviceType = "Unknown")
 {
     DynamicJsonDocument doc(2048);
     
@@ -243,7 +173,8 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
     doc["protocol"] = "wifi";
     doc["detection_method"] = detection_type;
     doc["alert_level"] = "HIGH";
-    doc["device_category"] = "FLOCK_SAFETY";
+    doc["device_category"] = deviceType;
+    doc["device_type"] = deviceType;
     
     // WiFi specific info
     doc["ssid"] = ssid;
@@ -263,26 +194,16 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
     doc["mac_prefix"] = mac_prefix;
     doc["vendor_oui"] = mac_prefix;
     
-    // Detection pattern matching
-    bool ssid_match = false;
-    bool mac_match = false;
+    // Detection pattern matching - use ConfigManager
+    String ssidDeviceType, macDeviceType;
+    bool ssid_match = configManager.checkSsidMatch(ssid, ssidDeviceType);
+    bool mac_match = configManager.checkMacMatch(mac, macDeviceType);
     
-    for (int i = 0; i < sizeof(wifi_ssid_patterns)/sizeof(wifi_ssid_patterns[0]); i++) {
-        if (strcasestr(ssid, wifi_ssid_patterns[i])) {
-            doc["matched_ssid_pattern"] = wifi_ssid_patterns[i];
-            doc["ssid_match_confidence"] = "HIGH";
-            ssid_match = true;
-            break;
-        }
+    if (ssid_match) {
+        doc["ssid_match_confidence"] = "HIGH";
     }
-    
-    for (int i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
-        if (strncasecmp(mac_prefix, mac_prefixes[i], 8) == 0) {
-            doc["matched_mac_pattern"] = mac_prefixes[i];
-            doc["mac_match_confidence"] = "HIGH";
-            mac_match = true;
-            break;
-        }
+    if (mac_match) {
+        doc["mac_match_confidence"] = "HIGH";
     }
     
     // Detection summary
@@ -303,7 +224,7 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
     Serial.println(json_output);
 }
 
-void output_ble_detection_json(const char* mac, const char* name, int rssi, const char* detection_method)
+void output_ble_detection_json(const char* mac, const char* name, int rssi, const char* detection_method, const char* deviceType = "Unknown")
 {
     DynamicJsonDocument doc(2048);
     
@@ -313,7 +234,8 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
     doc["protocol"] = "bluetooth_le";
     doc["detection_method"] = detection_method;
     doc["alert_level"] = "HIGH";
-    doc["device_category"] = "FLOCK_SAFETY";
+    doc["device_category"] = deviceType;
+    doc["device_type"] = deviceType;
     
     // BLE specific info
     doc["mac_address"] = mac;
@@ -338,30 +260,16 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
     doc["mac_prefix"] = mac_prefix;
     doc["vendor_oui"] = mac_prefix;
     
-    // Detection pattern matching
-    bool name_match = false;
-    bool mac_match = false;
+    // Detection pattern matching - use ConfigManager
+    String macDeviceType, nameDeviceType;
+    bool mac_match = configManager.checkMacMatch(mac, macDeviceType);
+    bool name_match = (name && strlen(name) > 0) ? configManager.checkBleNameMatch(name, nameDeviceType) : false;
     
-    // Check MAC prefix patterns
-    for (int i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
-        if (strncasecmp(mac, mac_prefixes[i], strlen(mac_prefixes[i])) == 0) {
-            doc["matched_mac_pattern"] = mac_prefixes[i];
-            doc["mac_match_confidence"] = "HIGH";
-            mac_match = true;
-            break;
-        }
+    if (mac_match) {
+        doc["mac_match_confidence"] = "HIGH";
     }
-    
-    // Check device name patterns
-    if (name && strlen(name) > 0) {
-        for (int i = 0; i < sizeof(device_name_patterns)/sizeof(device_name_patterns[0]); i++) {
-            if (strcasestr(name, device_name_patterns[i])) {
-                doc["matched_name_pattern"] = device_name_patterns[i];
-                doc["name_match_confidence"] = "HIGH";
-                name_match = true;
-                break;
-            }
-        }
+    if (name_match) {
+        doc["name_match_confidence"] = "HIGH";
     }
     
     // Detection summary
@@ -377,7 +285,7 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
     // Detection method details
     if (strcmp(detection_method, "mac_prefix") == 0) {
         doc["primary_indicator"] = "MAC_ADDRESS";
-        doc["detection_reason"] = "MAC address matches known Flock Safety prefix";
+        doc["detection_reason"] = "MAC address matches known surveillance device prefix";
     } else if (strcmp(detection_method, "device_name") == 0) {
         doc["primary_indicator"] = "DEVICE_NAME";
         doc["detection_reason"] = "Device name matches Flock Safety pattern";
@@ -389,52 +297,48 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
 }
 
 // ============================================================================
-// DETECTION HELPER FUNCTIONS
+// DETECTION HELPER FUNCTIONS (Now using ConfigManager)
 // ============================================================================
 
 bool check_mac_prefix(const uint8_t* mac)
 {
-    char mac_str[9];  // Only need first 3 octets for prefix check
-    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x", mac[0], mac[1], mac[2]);
-    
-    for (int i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
-        if (strncasecmp(mac_str, mac_prefixes[i], 8) == 0) {
-            return true;
-        }
-    }
-    return false;
+    String deviceType;
+    return configManager.checkMacMatch(mac, deviceType);
+}
+
+bool check_mac_prefix(const uint8_t* mac, String& deviceTypeOut)
+{
+    return configManager.checkMacMatch(mac, deviceTypeOut);
 }
 
 bool check_ssid_pattern(const char* ssid)
 {
-    if (!ssid) return false;
-    
-    for (int i = 0; i < sizeof(wifi_ssid_patterns)/sizeof(wifi_ssid_patterns[0]); i++) {
-        if (strcasestr(ssid, wifi_ssid_patterns[i])) {
-            return true;
-        }
-    }
-    return false;
+    String deviceType;
+    return configManager.checkSsidMatch(ssid, deviceType);
+}
+
+bool check_ssid_pattern(const char* ssid, String& deviceTypeOut)
+{
+    return configManager.checkSsidMatch(ssid, deviceTypeOut);
 }
 
 bool check_device_name_pattern(const char* name)
 {
-    if (!name) return false;
-    
-    for (int i = 0; i < sizeof(device_name_patterns)/sizeof(device_name_patterns[0]); i++) {
-        if (strcasestr(name, device_name_patterns[i])) {
-            return true;
-        }
-    }
-    return false;
+    String deviceType;
+    return configManager.checkBleNameMatch(name, deviceType);
+}
+
+bool check_device_name_pattern(const char* name, String& deviceTypeOut)
+{
+    return configManager.checkBleNameMatch(name, deviceTypeOut);
 }
 
 // ============================================================================
-// RAVEN UUID DETECTION
+// RAVEN UUID DETECTION (Now using ConfigManager for pattern matching)
 // ============================================================================
 
-// Check if a BLE device advertises any Raven surveillance service UUIDs
-bool check_raven_service_uuid(NimBLEAdvertisedDevice* device, char* detected_service_out = nullptr)
+// Check if a BLE device advertises any surveillance service UUIDs
+bool check_raven_service_uuid(NimBLEAdvertisedDevice* device, char* detected_service_out = nullptr, String* deviceTypeOut = nullptr)
 {
     if (!device) return false;
     
@@ -445,20 +349,21 @@ bool check_raven_service_uuid(NimBLEAdvertisedDevice* device, char* detected_ser
     int serviceCount = device->getServiceUUIDCount();
     if (serviceCount == 0) return false;
     
-    // Check each advertised service UUID against known Raven UUIDs
+    // Check each advertised service UUID against known patterns
     for (int i = 0; i < serviceCount; i++) {
         NimBLEUUID serviceUUID = device->getServiceUUID(i);
         std::string uuidStr = serviceUUID.toString();
         
-        // Compare against each known Raven service UUID
-        for (int j = 0; j < sizeof(raven_service_uuids)/sizeof(raven_service_uuids[0]); j++) {
-            if (strcasecmp(uuidStr.c_str(), raven_service_uuids[j]) == 0) {
-                // Match found! Store the detected service UUID if requested
-                if (detected_service_out != nullptr) {
-                    strncpy(detected_service_out, uuidStr.c_str(), 40);
-                }
-                return true;
+        // Use ConfigManager to check UUID patterns
+        String deviceType;
+        if (configManager.checkBleUuidMatch(uuidStr.c_str(), deviceType)) {
+            if (detected_service_out != nullptr) {
+                strncpy(detected_service_out, uuidStr.c_str(), 40);
             }
+            if (deviceTypeOut != nullptr) {
+                *deviceTypeOut = deviceType;
+            }
+            return true;
         }
     }
     
@@ -577,12 +482,13 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
     streamWiFiScan(ssid[0] ? ssid : "(hidden)", hdr->addr2, ppkt->rx_ctrl.rssi, current_channel, frameTypeStr);
     
     // Check if SSID matches our patterns
-    if (strlen(ssid) > 0 && check_ssid_pattern(ssid)) {
+    String ssidDeviceType;
+    if (strlen(ssid) > 0 && check_ssid_pattern(ssid, ssidDeviceType)) {
         const char* detection_type = (frame_type == 0x20) ? "probe_request" : "beacon";
-        output_wifi_detection_json(ssid, hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
+        output_wifi_detection_json(ssid, hdr->addr2, ppkt->rx_ctrl.rssi, detection_type, ssidDeviceType.c_str());
         
         // Broadcast to iOS app if connected
-        broadcastWiFiDetection(ssid, hdr->addr2, ppkt->rx_ctrl.rssi);
+        broadcastDetection(ssidDeviceType.c_str(), nullptr, ssid, ppkt->rx_ctrl.rssi, 0.9);
         
         if (!triggered) {
             triggered = true;
@@ -594,12 +500,16 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
     }
     
     // Check MAC address
-    if (check_mac_prefix(hdr->addr2)) {
+    String macDeviceType;
+    if (check_mac_prefix(hdr->addr2, macDeviceType)) {
         const char* detection_type = (frame_type == 0x20) ? "probe_request_mac" : "beacon_mac";
-        output_wifi_detection_json(ssid[0] ? ssid : "hidden", hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
+        output_wifi_detection_json(ssid[0] ? ssid : "hidden", hdr->addr2, ppkt->rx_ctrl.rssi, detection_type, macDeviceType.c_str());
         
         // Broadcast to iOS app if connected
-        broadcastWiFiDetection(ssid[0] ? ssid : "unknown", hdr->addr2, ppkt->rx_ctrl.rssi);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x", 
+                 hdr->addr2[0], hdr->addr2[1], hdr->addr2[2], hdr->addr2[3], hdr->addr2[4], hdr->addr2[5]);
+        broadcastDetection(macDeviceType.c_str(), mac_str, ssid[0] ? ssid : "unknown", ppkt->rx_ctrl.rssi, 0.85);
         
         if (!triggered) {
             triggered = true;
@@ -635,12 +545,13 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
         // Stream ALL BLE devices to iOS app for debug view
         streamBLEScan(name.c_str(), addrStr.c_str(), rssi, hasServices);
         
-        // Check MAC prefix
-        if (check_mac_prefix(mac)) {
-            output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "mac_prefix");
+        // Check MAC prefix using ConfigManager
+        String macDeviceType;
+        if (check_mac_prefix(mac, macDeviceType)) {
+            output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "mac_prefix", macDeviceType.c_str());
             
             // Broadcast to iOS app
-            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, "Flock Safety");
+            broadcastDetection(macDeviceType.c_str(), addrStr.c_str(), name.c_str(), rssi, 0.9);
             
             if (!triggered) {
                 triggered = true;
@@ -651,15 +562,13 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             return;
         }
         
-        // Check device name
-        if (!name.empty() && check_device_name_pattern(name.c_str())) {
-            output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "device_name");
+        // Check device name using ConfigManager
+        String nameDeviceType;
+        if (!name.empty() && check_device_name_pattern(name.c_str(), nameDeviceType)) {
+            output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "device_name", nameDeviceType.c_str());
             
-            // Broadcast to iOS app - determine type from name
-            const char* devType = "Flock Safety";
-            if (strcasestr(name.c_str(), "penguin")) devType = "Penguin";
-            else if (strcasestr(name.c_str(), "pigvision")) devType = "Pigvision";
-            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, devType);
+            // Broadcast to iOS app with correct type from config
+            broadcastDetection(nameDeviceType.c_str(), addrStr.c_str(), name.c_str(), rssi, 0.85);
             
             if (!triggered) {
                 triggered = true;
@@ -670,19 +579,19 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             return;
         }
         
-        // Check for Raven surveillance device service UUIDs
+        // Check for surveillance device service UUIDs using ConfigManager
         char detected_service_uuid[41] = {0};
-        if (check_raven_service_uuid(advertisedDevice, detected_service_uuid)) {
-            // Raven device detected! Get firmware version estimate
+        String uuidDeviceType;
+        if (check_raven_service_uuid(advertisedDevice, detected_service_uuid, &uuidDeviceType)) {
+            // Surveillance device detected! Get firmware version estimate
             const char* fw_version = estimate_raven_firmware_version(advertisedDevice);
             const char* service_desc = get_raven_service_description(detected_service_uuid);
             
-            // Create enhanced JSON output with Raven-specific data
+            // Create enhanced JSON output with device-specific data
             StaticJsonDocument<1024> doc;
             doc["protocol"] = "bluetooth_le";
-            doc["detection_method"] = "raven_service_uuid";
-            doc["device_type"] = "RAVEN_GUNSHOT_DETECTOR";
-            doc["manufacturer"] = "SoundThinking/ShotSpotter";
+            doc["detection_method"] = "service_uuid";
+            doc["device_type"] = uuidDeviceType.c_str();
             doc["mac_address"] = addrStr.c_str();
             doc["rssi"] = rssi;
             doc["signal_strength"] = rssi > -50 ? "STRONG" : (rssi > -70 ? "MEDIUM" : "WEAK");
@@ -691,10 +600,13 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
                 doc["device_name"] = name.c_str();
             }
             
-            // Raven-specific information
-            doc["raven_service_uuid"] = detected_service_uuid;
-            doc["raven_service_description"] = service_desc;
-            doc["raven_firmware_version"] = fw_version;
+            // Service-specific information
+            doc["detected_service_uuid"] = detected_service_uuid;
+            doc["service_description"] = service_desc;
+            if (uuidDeviceType == "Raven") {
+                doc["manufacturer"] = "SoundThinking/ShotSpotter";
+                doc["firmware_version"] = fw_version;
+            }
             doc["threat_level"] = "CRITICAL";
             doc["threat_score"] = 100;
             
@@ -712,8 +624,8 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             serializeJson(doc, Serial);
             Serial.println();
             
-            // Broadcast Raven detection to iOS app
-            broadcastBLEDetection(name.c_str(), addrStr.c_str(), rssi, "Raven (Gunshot Detector)");
+            // Broadcast detection to iOS app
+            broadcastDetection(uuidDeviceType.c_str(), addrStr.c_str(), name.c_str(), rssi, 1.0);
             
             if (!triggered) {
                 triggered = true;
@@ -727,15 +639,16 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
 };
 
 // ============================================================================
-// CHANNEL HOPPING
+// CHANNEL HOPPING (Now using dynamic config)
 // ============================================================================
 
 void hop_channel()
 {
+    ScanConfig& cfg = configManager.getScanConfig();
     unsigned long now = millis();
-    if (now - last_channel_hop > CHANNEL_HOP_INTERVAL) {
+    if (now - last_channel_hop > cfg.channelHopInterval) {
         current_channel++;
-        if (current_channel > MAX_CHANNEL) {
+        if (current_channel > cfg.maxChannel) {
             current_channel = 1;
         }
         esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
@@ -744,6 +657,29 @@ void hop_channel()
         streamChannelHop(current_channel);
     }
 }
+
+// ============================================================================
+// CONFIGURATION UPDATE CALLBACK
+// ============================================================================
+
+void onConfigurationUpdated() {
+    Serial.println("[Main] Configuration updated from iOS app!");
+    
+    // Flash LED to indicate config update
+    led_flash(COLOR_CONFIG, 200);
+    led_flash(COLOR_CONFIG, 200);
+    
+    // Print new config
+    configManager.printConfig();
+    
+    // Note: Scan parameters will take effect on next scan cycle
+}
+
+// ============================================================================
+// BLE SCAN TIMING
+// ============================================================================
+
+static unsigned long last_ble_scan = 0;
 
 // ============================================================================
 // MAIN FUNCTIONS
@@ -759,6 +695,10 @@ void setup()
     boot_led_sequence();
     
     printf("Starting Flock Squawk Enhanced Detection System...\n\n");
+    
+    // Initialize Configuration Manager (loads from NVS or uses defaults)
+    printf("[Config] Initializing configuration manager...\n");
+    configManager.begin();
     
     // Initialize WiFi in promiscuous mode for surveillance device detection
     printf("[WiFi] Initializing promiscuous scanning mode...\n");
@@ -780,6 +720,9 @@ void setup()
     // Initialize BLE broadcast service for iOS app connection
     initBLEBroadcast();
     
+    // Set config update callback
+    setConfigUpdatedCallback(onConfigurationUpdated);
+    
     // Initialize BLE scanner for detecting surveillance devices
     pBLEScan = NimBLEDevice::getScan();
     pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
@@ -788,7 +731,7 @@ void setup()
     pBLEScan->setWindow(99);
     
     printf("BLE scanner initialized\n");
-    printf("System ready - hunting for Flock Safety devices...\n");
+    printf("System ready - hunting for surveillance devices...\n");
     printf("iOS app can connect via Bluetooth to 'FlockFinder-S3'\n\n");
     
     last_channel_hop = millis();
@@ -796,6 +739,8 @@ void setup()
 
 void loop()
 {
+    ScanConfig& cfg = configManager.getScanConfig();
+    
     // Handle channel hopping for WiFi promiscuous mode
     hop_channel();
     
@@ -803,27 +748,31 @@ void loop()
     if (device_in_range) {
         unsigned long now = millis();
         
-        // Check if 10 seconds have passed since last heartbeat
-        if (now - last_heartbeat >= 10000) {
+        // Check if heartbeat interval has passed
+        if (now - last_heartbeat >= cfg.heartbeatInterval) {
             heartbeat_pulse();
             last_heartbeat = now;
         }
         
-        // Check if device has gone out of range (no detection for 30 seconds)
-        if (now - last_detection_time >= 30000) {
+        // Check if device has gone out of range (no detection for timeout period)
+        if (now - last_detection_time >= cfg.detectionTimeout) {
             printf("Device out of range - stopping heartbeat\n");
             device_in_range = false;
             triggered = false; // Allow new detections
+            // Return to scanning color
+            pixel.setPixelColor(0, COLOR_SCANNING);
+            pixel.show();
         }
     }
     
-    if (millis() - last_ble_scan >= BLE_SCAN_INTERVAL && !pBLEScan->isScanning()) {
+    // BLE scanning with dynamic interval
+    if (millis() - last_ble_scan >= cfg.bleScanInterval && !pBLEScan->isScanning()) {
         streamStatus("BLE scan starting...");
-        pBLEScan->start(BLE_SCAN_DURATION, false);
+        pBLEScan->start(cfg.bleScanDuration, false);
         last_ble_scan = millis();
     }
     
-    if (pBLEScan->isScanning() == false && millis() - last_ble_scan > BLE_SCAN_DURATION * 1000) {
+    if (pBLEScan->isScanning() == false && millis() - last_ble_scan > cfg.bleScanDuration * 1000) {
         pBLEScan->clearResults();
     }
     
